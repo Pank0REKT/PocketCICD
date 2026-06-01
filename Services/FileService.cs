@@ -1,12 +1,20 @@
 ﻿using System.Diagnostics;
 using PocketCICD.Interfaces;
 using System.IO;
+using Exception = System.Exception;
 
 namespace PocketCICD.Services;
 
 public class FileService : IFileService
 {
-    public bool MoveToUpdate(string updateDirectory, string sourceDirectory, string[] exclusionPaths)
+    public int GetFilesCount(string directory)
+    {
+        return Directory.Exists(directory)
+            ? Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length
+            : 0;
+    }
+
+    public async Task<bool> MoveToUpdate(string updateDirectory, string sourceDirectory, string[] exclusionPaths)
     {
         try
         {
@@ -21,6 +29,7 @@ public class FileService : IFileService
 
                 Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                 File.Copy(file, destPath, overwrite: true);
+                await ProgressService.DoStepAsync();
             }
 
             return true;
@@ -32,7 +41,7 @@ public class FileService : IFileService
         }
     }
 
-    public bool CreateBackup(string backupDirectory, string mainDirectory)
+    public async Task<bool> CreateBackup(string backupDirectory, string mainDirectory)
     {
         try
         {
@@ -45,8 +54,8 @@ public class FileService : IFileService
                              .OrderByDescending(d => d.Length))
                     Directory.Delete(dir);
             }
-            
-            CopyDirectory(mainDirectory, backupDirectory);
+
+            await CopyDirectoryAsync(mainDirectory, backupDirectory);
 
             return true;
         }
@@ -57,11 +66,11 @@ public class FileService : IFileService
         }
     }
 
-    public bool RenameAppOffline(string targetDirectory, bool enable)
+    public async Task<bool> RenameAppOffline(string targetDirectory, bool enable)
     {
         try
         {
-            var activePath   = Path.Combine(targetDirectory, "app_offline.htm");
+            var activePath = Path.Combine(targetDirectory, "app_offline.htm");
             var disabledPath = Path.Combine(targetDirectory, "--app_offline.htm");
 
             if (enable)
@@ -76,10 +85,11 @@ public class FileService : IFileService
                 if (File.Exists(activePath))
                     File.Move(activePath, disabledPath);
                 else if (!File.Exists(disabledPath))
-                    LogError(nameof(RenameAppOffline), 
+                    LogError(nameof(RenameAppOffline),
                         new FileNotFoundException("Не найден ни app_offline.htm ни --app_offline.htm"));
             }
 
+            await ProgressService.DoStepAsync();
             return true;
         }
         catch (Exception ex)
@@ -89,7 +99,7 @@ public class FileService : IFileService
         }
     }
 
-    public bool DeleteOldFiles(string targetDirectory, string[] exclusionPaths)
+    public async Task<bool> DeleteOldFiles(string targetDirectory, string[] exclusionPaths)
     {
         try
         {
@@ -99,9 +109,10 @@ public class FileService : IFileService
                 {
                     continue;
                 }
-                
+
                 if (IsExcluded(file, exclusionPaths)) continue;
                 File.Delete(file);
+                await ProgressService.DoStepAsync();
             }
 
             foreach (var dir in Directory.GetDirectories(targetDirectory, "*", SearchOption.AllDirectories)
@@ -121,7 +132,7 @@ public class FileService : IFileService
         }
     }
 
-    public bool MoveUpdateToMainDirectory(string updateDirectory, string targetDirectory)
+    public async Task<bool> MoveUpdateToMainDirectory(string updateDirectory, string targetDirectory)
     {
         try
         {
@@ -132,7 +143,7 @@ public class FileService : IFileService
 
                 Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
 
-                MoveFileWithRetry(file, destPath);
+                await MoveFileWithRetryAsync(file, destPath);
             }
 
             return true;
@@ -151,70 +162,65 @@ public class FileService : IFileService
             path.Equals(excluded, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static void CopyDirectory(string source, string destination)
+    private static async Task CopyDirectoryAsync(string source, string destination)
     {
-        var normalizedSource = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar);
+        var normalizedSource      = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar);
         var normalizedDestination = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar);
 
         Directory.CreateDirectory(destination);
 
         foreach (var file in Directory.GetFiles(source))
         {
-            if (file.ToLower().Contains("app_offline"))
-            {
-                continue;
-            }
+            if (file.ToLower().Contains("app_offline")) continue;
 
             var destFile = Path.Combine(destination, Path.GetFileName(file));
             File.Copy(file, destFile, overwrite: true);
+            await ProgressService.DoStepAsync();
         }
 
         foreach (var dir in Directory.GetDirectories(source))
         {
-            if (dir.ToLower().Contains("backup") || dir.ToLower().Contains("update"))
-            {
-                continue;
-            }
+            if (dir.ToLower().Contains("backup") || dir.ToLower().Contains("update")) continue;
 
             var normalizedDir = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
-
             if (normalizedDir.StartsWith(normalizedDestination, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             var destDir = Path.Combine(destination, Path.GetFileName(dir));
-            CopyDirectory(dir, destDir);
+            await CopyDirectoryAsync(dir, destDir);
         }
     }
 
-    private static void MoveFileWithRetry(string source, string dest, int retries = 3)
+    private static async Task MoveFileWithRetryAsync(string source, string dest, int retries = 3)
     {
         for (int i = 0; i < retries; i++)
         {
             try
             {
                 File.Move(source, dest, overwrite: true);
+                await ProgressService.DoStepAsync();
                 return;
             }
             catch (IOException) when (i < retries - 1)
             {
-                Thread.Sleep(500);
+                await Task.Delay(500);
             }
         }
     }
-    
-    public bool CreateLocalBackup(string projectName, string mainDirectory)
+
+    public async Task<bool> CreateLocalBackup(string projectName, string mainDirectory)
     {
         try
         {
             var exeFolder = AppDomain.CurrentDomain.BaseDirectory;
             var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-            
+
             var safeName = string.Concat(projectName
                 .Split(Path.GetInvalidFileNameChars()));
-            
+
             var backupDir = Path.Combine(exeFolder, "Backups", $"{safeName}_{timestamp}");
 
-            CopyDirectory(mainDirectory, backupDir);
+            await CopyDirectoryAsync(mainDirectory, backupDir);
 
             return true;
         }

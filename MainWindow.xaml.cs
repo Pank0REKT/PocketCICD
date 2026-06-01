@@ -3,8 +3,10 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.WindowsAPICodePack.Dialogs;
+using PocketCICD.Enums;
 using PocketCICD.Interfaces;
 using PocketCICD.Models;
+using PocketCICD.Services;
 
 namespace PocketCICD
 {
@@ -23,6 +25,7 @@ namespace PocketCICD
 
             Project.ExclusionPaths = new ObservableCollection<string>();
             ListExclusions.ItemsSource = Project.ExclusionPaths;
+            ProgressService.SetProgressBarElements(ProgressBar, ProgressBarTextBlock);
 
             Loaded += async (_, _) => await LoadProjectsAsync();
         }
@@ -85,8 +88,7 @@ namespace PocketCICD
                 label.Foreground = activeBrush;
             }
         }
-
-        // ── button handlers ──────────────────────────────────────────────────
+        
 
         private void BtnSourceProject_Click(object sender, RoutedEventArgs e)
         {
@@ -137,41 +139,68 @@ namespace PocketCICD
         {
             if (!ValidatePaths()) return;
 
+            // ✅ Читаем всё из UI-потока до любых Task.Run
             Project.ExclusionPaths!.Add(Project.BackupDirectory!);
             Project.ExclusionPaths!.Add(Project.UpdateDirectory!);
 
             var exclusions = Project.ExclusionPaths?.ToArray() ?? [];
-
-            _fileService.CreateBackup(Project.BackupDirectory!, Project.TargetDirectory!);
-
-            if (ChkLocalBackup.IsChecked == true)
+            var localBackup = ChkLocalBackup.IsChecked == true;
+            var projectName = Project.ProjectName;
+            var sourceDir = Project.SourceDirectory!;
+            var targetDir = Project.TargetDirectory!;
+            var backupDir = Project.BackupDirectory!;
+            var updateDir = Project.UpdateDirectory!;
+            
+            if (localBackup && string.IsNullOrWhiteSpace(projectName))
             {
-                if (string.IsNullOrWhiteSpace(Project.ProjectName))
+                var name = AskProjectName(null);
+                if (name is null)
                 {
-                    var name = AskProjectName(null);
-                    if (name is null)
-                    {
-                        var result = MessageBox.Show(
-                            "Название проекта не указано — локальный Backup не будет создан.\nПродолжить публикацию?",
-                            "Внимание", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    var result = MessageBox.Show(
+                        "Название проекта не указано — локальный Backup не будет создан.\nПродолжить публикацию?",
+                        "Внимание", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
-                        if (result == MessageBoxResult.No) return;
-                    }
-                    else
-                    {
-                        Project.ProjectName = name;
-                    }
+                    if (result == MessageBoxResult.No) return;
+                    localBackup = false;
                 }
-
-                if (!string.IsNullOrWhiteSpace(Project.ProjectName))
-                    _fileService.CreateLocalBackup(Project.ProjectName, Project.TargetDirectory!);
+                else
+                {
+                    Project.ProjectName = name;
+                    projectName = name;
+                }
             }
+            
+            ProgressService.SetText(ProgressStages.CreatingBackup);
+            ProgressService.SetProgressStep(_fileService.GetFilesCount(targetDir));
+            await Task.Run(async () => await _fileService.CreateBackup(backupDir, targetDir));
 
-            _fileService.MoveToUpdate(Project.UpdateDirectory!, Project.SourceDirectory!, exclusions);
-            _fileService.RenameAppOffline(Project.TargetDirectory!, enable: true);
-            _fileService.DeleteOldFiles(Project.TargetDirectory!, exclusions);
-            _fileService.MoveUpdateToMainDirectory(Project.UpdateDirectory!, Project.TargetDirectory!);
-            _fileService.RenameAppOffline(Project.TargetDirectory!, enable: false);
+            if (localBackup && !string.IsNullOrWhiteSpace(projectName))
+            {
+                var pName = projectName;
+                await Task.Run(async () => await _fileService.CreateLocalBackup(pName, targetDir));
+            }
+            
+            ProgressService.SetText(ProgressStages.MovingUpdatePackage);
+            ProgressService.SetProgressStep(_fileService.GetFilesCount(sourceDir));
+            await Task.Run(async () => await _fileService.MoveToUpdate(updateDir, sourceDir, exclusions));
+            
+            ProgressService.SetText(ProgressStages.EnablingAppOffline);
+            ProgressService.SetProgressStep(1);
+            await Task.Run(async () => await _fileService.RenameAppOffline(targetDir, enable: true));
+            
+            ProgressService.SetText(ProgressStages.DeletingOldVersionFiles);
+            ProgressService.SetProgressStep(_fileService.GetFilesCount(targetDir));
+            await Task.Run(async () => await _fileService.DeleteOldFiles(targetDir, exclusions));
+            
+            ProgressService.SetText(ProgressStages.DeployingUpdatedFiles);
+            ProgressService.SetProgressStep(_fileService.GetFilesCount(updateDir));
+            await Task.Run(async () => await _fileService.MoveUpdateToMainDirectory(updateDir, targetDir));
+            
+            ProgressService.SetText(ProgressStages.DisablingAppOffline);
+            ProgressService.SetProgressStep(1);
+            await Task.Run(async () => await _fileService.RenameAppOffline(targetDir, enable: false));
+
+            ProgressService.ResetProgress();
 
             MessageBox.Show("Публикация завершена!", "Успех",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -199,9 +228,7 @@ namespace PocketCICD
 
             LblExclusionsEmpty.Visibility = Visibility.Visible;
         }
-
-        // ComboBox
-
+        
         private async Task LoadProjectsAsync()
         {
             var projects = await _databaseService.GetAllProjectsAsync();
@@ -242,8 +269,7 @@ namespace PocketCICD
             LblExclusionsEmpty.Visibility =
                 Project.ExclusionPaths.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
         }
-
-        // ── validation ───────────────────────────────────────────────────────
+        
 
         private bool ValidatePaths()
         {
@@ -263,31 +289,8 @@ namespace PocketCICD
             return false;
         }
 
-        private async void ButtonSave_OnClick(object sender, RoutedEventArgs e)
-        {
-            if (string.IsNullOrWhiteSpace(Project.ProjectName))
-            {
-                var name = Microsoft.VisualBasic.Interaction.InputBox(
-                    "Введите название проекта:", "Сохранение проекта", "Мой проект");
-
-                if (string.IsNullOrWhiteSpace(name)) return;
-                Project.ProjectName = name;
-            }
-
-            var savedId = await _databaseService.SaveProjectAsync(Project);
-            Project.ProjectId = savedId;
-
-            await LoadProjectsAsync();
-
-            ComboBoxProjects.SelectedValue = savedId;
-
-            MessageBox.Show($"Проект «{Project.ProjectName}» сохранён.", "Готово",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-
         private async void BtnSaveNew_OnClick(object sender, RoutedEventArgs e)
         {
-            // Сбрасываем ProjectId — это всегда новый проект
             Project.ProjectId = null;
 
             var name = AskProjectName(Project.ProjectName);

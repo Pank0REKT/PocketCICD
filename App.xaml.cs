@@ -17,7 +17,7 @@ namespace PocketCICD
             ConfigureServices(services);
 
             Services = services.BuildServiceProvider();
-            
+
             var mainWindow = Services.GetRequiredService<MainWindow>();
             mainWindow.Show();
         }
@@ -30,4 +30,3 @@ namespace PocketCICD
         }
     }
 }
-
