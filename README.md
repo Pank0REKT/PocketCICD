@@ -59,8 +59,8 @@
 
 ### Требования
 
-- Windows 10 / 11
-- [.NET 8 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+- Windows 7/8/10/11
+- [.NET Runtime](https://dotnet.microsoft.com/ru-ru/download/dotnet/10.0)
 
 ### Запуск из исходников
 
