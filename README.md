@@ -59,7 +59,7 @@
 
 ### Требования
 
-- Windows 7/8/10/11
+- Windows/MacOS
 - [.NET Runtime](https://dotnet.microsoft.com/ru-ru/download/dotnet/10.0)
 
 ### Запуск из исходников
