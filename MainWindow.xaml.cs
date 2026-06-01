@@ -1,4 +1,5 @@
 ﻿using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.WindowsAPICodePack.Dialogs;
@@ -331,6 +332,15 @@ namespace PocketCICD
         {
             var dialog = new ProjectNameDialog(currentName);
             return dialog.ShowDialog() == true ? dialog.ProjectName : null;
+        }
+
+        private void BtnGitHub_Click(object sender, RoutedEventArgs e)
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://github.com/Pank0REKT/PocketCICD",
+                UseShellExecute = true
+            });
         }
     }
 }
